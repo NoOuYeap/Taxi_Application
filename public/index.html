@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>회원가입/로그인/탈퇴 + 채팅</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #chat-box {
+      border: 1px solid #ccc;
+      width: 400px;
+      height: 300px;
+      overflow-y: auto;
+      margin-top: 20px;
+      padding: 10px;
+    }
+    #chat-input { width: 300px; padding: 5px; }
+    #send-btn { padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h2>회원가입 / 로그인 / 탈퇴</h2>
+
+  <input type="text" id="username" placeholder="아이디 입력"><br>
+  <input type="password" id="password" placeholder="비밀번호 입력"><br><br>
+
+  <button onclick="signup()">회원가입</button>
+  <button onclick="login()">로그인</button>
+  <button onclick="deleteUser()">회원탈퇴</button>
+
+  <p id="result"></p>
+
+  <hr>
+
+  <h2>채팅</h2>
+  <div id="chat-box"></div>
+  <input type="text" id="chat-input" placeholder="메시지 입력...">
+  <button id="send-btn">보내기</button>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const API_URL = "http://localhost:3000";
+    const socket = io(API_URL);
+
+    let loggedUsername = "";
+
+    // 회원가입
+    async function signup() {
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const res = await fetch(`${API_URL}/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      document.getElementById("result").innerText = "📥 " + data.message;
+    }
+
+    // 로그인
+    async function login() {
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const res = await fetch(`${API_URL}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      document.getElementById("result").innerText = "🔑 " + data.message;
+      if (data.success) loggedUsername = username;
+    }
+
+    // 회원탈퇴
+    async function deleteUser() {
+      const username = document.getElementById("username").value;
+      const res = await fetch(`${API_URL}/delete`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username })
+      });
+      const data = await res.json();
+      document.getElementById("result").innerText = "🗑 " + data.message;
+      if (loggedUsername === username) loggedUsername = "";
+    }
+
+    // =====================
+    // 채팅 기능
+    // =====================
+    const chatBox = document.getElementById("chat-box");
+    const chatInput = document.getElementById("chat-input");
+    const sendBtn = document.getElementById("send-btn");
+
+    sendBtn.addEventListener("click", () => {
+      const message = chatInput.value.trim();
+      if (!message || !loggedUsername) return;
+      socket.emit("chatMessage", { username: loggedUsername, message });
+      chatInput.value = "";
+    });
+
+    socket.on("chatMessage", ({ username, message }) => {
+      const p = document.createElement("p");
+      p.textContent = username + ": " + message;
+      chatBox.appendChild(p);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    });
+  </script>
+</body>
+</html>
