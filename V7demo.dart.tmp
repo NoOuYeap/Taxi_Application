@@ -1,0 +1,293 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:eventsource/eventsource.dart';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:socket_io_client/socket_io_client.dart' as io;
+
+/// demoV7.dart
+/// serverV7.js (로그??+ 경로 ?�출 + ?�동 채팅) ?�스?�용 Flutter ?�모
+
+void main() {
+  runApp(const DemoV7App());
+}
+
+class DemoV7App extends StatelessWidget {
+  const DemoV7App({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Server V7 Demo',
+      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.indigo),
+      home: const DemoV7Home(),
+    );
+  }
+}
+
+class DemoV7Home extends StatefulWidget {
+  const DemoV7Home({super.key});
+
+  @override
+  State<DemoV7Home> createState() => _DemoV7HomeState();
+}
+
+class _DemoV7HomeState extends State<DemoV7Home> {
+  final TextEditingController _baseUrl =
+      TextEditingController(text: 'http://192.168.0.4:3000');
+  final TextEditingController _username = TextEditingController();
+  final TextEditingController _password = TextEditingController();
+  final TextEditingController _matchId = TextEditingController(text: 'room-1');
+  final TextEditingController _origin = TextEditingController();
+  final TextEditingController _destination = TextEditingController();
+  final TextEditingController _chatInput = TextEditingController();
+
+  String? _token;
+  String? _statusLabel;
+  String? _statusNote;
+  String? _chatRoomId;
+  final List<String> _logs = [];
+  final List<Map<String, dynamic>> _messages = [];
+  io.Socket? _socket;
+  EventSource? _sse;
+
+  void _closeSse() {
+    try {
+      _sse?.client.close();
+    } catch (_) {}
+    _sse = null;
+  }
+
+  @override
+  void dispose() {
+    _socket?.dispose();
+    _closeSse();
+    _baseUrl.dispose();
+    _username.dispose();
+    _password.dispose();
+    _matchId.dispose();
+    _origin.dispose();
+    _destination.dispose();
+    _chatInput.dispose();
+    super.dispose();
+  }
+
+  void _log(String message) {
+    setState(() => _logs.add('${DateTime.now().toIso8601String()} | $message'));
+  }
+
+  Uri _uri(String path, [Map<String, String>? query]) {
+    return Uri.parse('${_baseUrl.text.trim()}$path')
+        .replace(queryParameters: query);
+  }
+
+  Future<void> _signup() async {
+    final body = jsonEncode({
+      'username': _username.text.trim(),
+      'password': _password.text.trim(),
+    });
+    final resp = await http.post(_uri('/api/v7/signup'),
+        headers: {'Content-Type': 'application/json'}, body: body);
+    _log(resp.statusCode == 201
+        ? '?�원가???�공'
+        : '?�원가???�패: ${resp.body}');
+  }
+
+  Future<void> _login() async {
+    final body = jsonEncode({
+      'username': _username.text.trim(),
+      'password': _password.text.trim(),
+    });
+    final resp = await http.post(_uri('/api/v7/login'),
+        headers: {'Content-Type': 'application/json'}, body: body);
+    if (resp.statusCode == 200) {
+      final data = jsonDecode(resp.body);
+      setState(() => _token = data['token'] as String?);
+      _log('로그???�공: ${data['username']}');
+    } else {
+      _log('로그???�패: ${resp.body}');
+    }
+  }
+
+  Future<void> _submitRoute() async {
+    if (_token == null) return _log('?�큰 ?�음');
+    final body = jsonEncode({
+      'matchId': _matchId.text.trim(),
+      'origin': _origin.text.trim(),
+      'destination': _destination.text.trim(),
+    });
+    final resp = await http.post(_uri('/api/v7/submit'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_token'
+        },
+        body: body);
+    _log(resp.statusCode == 200
+        ? '경로 ?�출 ?�공'
+        : '경로 ?�출 ?�패: ${resp.body}');
+  }
+
+  void _connectSse() async {
+    _closeSse();
+    final matchId = _matchId.text.trim();
+    final url = '${_baseUrl.text.trim()}/api/v7/stream?matchId=$matchId';
+    try {
+      final src = await EventSource.connect(url);
+      src.listen((event) {
+        if (event.event == 'status') {
+          final raw = event.data ?? '{}';
+          final data = jsonDecode(raw);
+          setState(() {
+            _statusLabel = data['label'];
+            _statusNote = data['note'];
+            _chatRoomId = data['chatRoomId'];
+          });
+          _log('SSE ?�태: ${event.data}');
+          if (_chatRoomId != null) _connectSocket();
+        }
+      });
+      _sse = src;
+      _log('SSE ?�결: $url');
+    } catch (err) {
+      _log('SSE ?�결 ?�패: $err');
+    }
+  }
+
+  void _connectSocket() {
+    if (_token == null || _chatRoomId == null) return;
+    _socket?.dispose();
+    final socket = io.io(_baseUrl.text.trim(),
+        io.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
+    socket.onConnect((_) {
+      socket.emit('joinRoom', {
+        'token': _token,
+        'matchId': _matchId.text.trim(),
+      });
+    });
+    socket.on('history', (data) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll((data as List).map((e) => Map<String, dynamic>.from(e as Map)));
+      });
+    });
+    socket.on('chatMessage', (data) {
+      setState(() => _messages.add(Map<String, dynamic>.from(data)));
+    });
+    socket.on('systemMessage', (data) {
+      setState(() => _messages.add(Map<String, dynamic>.from(data)));
+    });
+    socket.connect();
+    _socket = socket;
+    _log('Socket ?�결 ?�도');
+  }
+
+  void _sendChat() {
+    final msg = _chatInput.text.trim();
+    if (msg.isEmpty || _socket == null) return;
+    _socket!.emit('chatMessage', {'message': msg});
+    _chatInput.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('TMAP V7 Demo')),
+      body: _token == null ? _buildLoginOnlyView() : _buildMainView(),
+    );
+  }
+
+  Widget _buildLoginOnlyView() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                controller: _baseUrl,
+                decoration:
+                    const InputDecoration(labelText: '?�버 URL (http://IP:3000)'),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _username,
+                decoration: const InputDecoration(labelText: '?�이??),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _password,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: '비�?번호'),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _login,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  child: Text('로그??),
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: _signup,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 14),
+                  child: Text('?�원가??),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMainView() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            height: 240,
+            decoration: BoxDecoration(
+              color: Colors.blueGrey[100],
+              borderRadius: BorderRadius.circular(16),
+            ),
+            alignment: Alignment.center,
+            child: const Text('지???�역 (추후 SDK ?�동)'),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _origin,
+            decoration: const InputDecoration(labelText: '출발지'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _destination,
+            decoration: const InputDecoration(labelText: '?�착지'),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () {
+                _submitRoute();
+                _connectSse();
+              },
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 14),
+                child: Text('매칭'),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
