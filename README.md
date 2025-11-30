@@ -11,3 +11,4 @@
 <img src="https://github.com/user-attachments/assets/f5a4a588-c420-4e86-bb89-8b75e9c79fce" width="200" height="400"/> 채팅방 화면
 <img src="https://github.com/user-attachments/assets/abd5b76a-874b-418d-b46e-fd8c37478a03" width="200" height="400"/> 관리자 데이터 화면
 
+<img width="598" height="357" alt="image" src="https://github.com/user-attachments/assets/a089cafb-b4d4-4785-aaf2-f61e2af1d9c3" />
